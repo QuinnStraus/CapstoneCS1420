@@ -33,6 +33,7 @@ def process_skills(df: pd.DataFrame):
 
 
 SEQUENCE_LENGTH = 30
+SAVE_FOLDER = "no-fold-30"
 
 
 def prepare_data():
@@ -190,8 +191,13 @@ def prepare_data():
     # split data into SEQUENCE_LENGTH-assignment sequences by student
     # and move the difficulty and num_started columns to the next row
     student_assignments = merged_assignment_logs.groupby("student_id")
+    NUM_FOLDS = 3
+    fold_overlap = SEQUENCE_LENGTH // NUM_FOLDS
+
     total_sequences = (
-        (student_assignments.size() - 1).floordiv(SEQUENCE_LENGTH // 3).sum()
+        (student_assignments.size() - 1 - (NUM_FOLDS - 1) * fold_overlap)
+        .floordiv(fold_overlap)
+        .sum()
     )
     SCALAR_FEATURES = [
         "time_since_last",
@@ -216,7 +222,7 @@ def prepare_data():
             len(categorical_features),
         )
     )
-    labels = np.ndarray((total_sequences, 3))
+    labels = np.ndarray((total_sequences, SEQUENCE_LENGTH, 3))
     i = 0
     for _, student_data in tqdm(student_assignments):
         student_data = student_data.sort_values("start_time")
@@ -225,18 +231,26 @@ def prepare_data():
             .shift(-1)
             .fillna(0)
         )
-        for j in range(0, (len(student_data) - 1) // (SEQUENCE_LENGTH // 3)):
+        for j in range(
+            0, (len(student_data) - 1 - (NUM_FOLDS - 1) * fold_overlap) // fold_overlap
+        ):
             sequence = student_data.iloc[
-                (SEQUENCE_LENGTH // 3) * j : (SEQUENCE_LENGTH // 3) * (j + 3)
+                fold_overlap * j : fold_overlap * (j + NUM_FOLDS)
             ]
-            result_diff = student_data.iloc[(SEQUENCE_LENGTH // 3) * (j + 3)][
-                "difficulty"
-            ]
-            labels[i] = [
-                1 if result_diff < 1 / 3 else 0,
-                1 if 1 / 3 <= result_diff < 2 / 3 else 0,
-                1 if result_diff >= 2 / 3 else 0,
-            ]
+            result_diff = student_data.iloc[
+                fold_overlap * j + 1 : fold_overlap * (j + NUM_FOLDS) + 1
+            ]["difficulty"]
+            labels[i] = (
+                np.array(
+                    [
+                        (result_diff < 1 / 3).values,
+                        ((1 / 3 <= result_diff) & (result_diff < 2 / 3)).values,
+                        (result_diff >= 2 / 3).values,
+                    ]
+                )
+                .swapaxes(0, 1)
+                .astype(int)
+            )
 
             scalar_sequences[i] = sequence[SCALAR_FEATURES].values
             categorical_sequences[i] = sequence[categorical_features].values
@@ -246,9 +260,9 @@ def prepare_data():
     print("scalar sequences", scalar_sequences.shape)
     print("categorical sequences", categorical_sequences.shape)
     print("labels", labels.shape)
-    np.save("data/scalar_sequences.npy", scalar_sequences)
-    np.save("data/categorical_sequences.npy", categorical_sequences)
-    np.save("data/labels.npy", labels)
+    np.save(f"cleaned/{SAVE_FOLDER}scalar_sequences.npy", scalar_sequences)
+    np.save(f"cleaned/{SAVE_FOLDER}categorical_sequences.npy", categorical_sequences)
+    np.save(f"cleaned/{SAVE_FOLDER}labels.npy", labels)
     print("data saved")
 
 
@@ -257,7 +271,9 @@ if __name__ == "__main__":
 
 
 def load_prepared_data():
-    scalar_sequences: np.ndarray = np.load("data/scalar_sequences.npy")
-    categorical_sequences: np.ndarray = np.load("data/categorical_sequences.npy")
-    labels: np.ndarray = np.load("data/labels.npy")
+    scalar_sequences: np.ndarray = np.load("cleaned/{SAVE_FOLDER}scalar_sequences.npy")
+    categorical_sequences: np.ndarray = np.load(
+        "cleaned/{SAVE_FOLDER}categorical_sequences.npy"
+    )
+    labels: np.ndarray = np.load("cleaned/{SAVE_FOLDER}labels.npy")
     return scalar_sequences, categorical_sequences, labels

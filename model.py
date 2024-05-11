@@ -18,12 +18,12 @@ BATCH_SIZE = 32
 
 def run_model():
     scalar_sequences, categorical_sequences, labels = load_prepared_data()
-    difficulties = scalar_sequences[:, 1:, -1].mean(axis=1)
-    onehot_difficulties = np.zeros((len(difficulties), 3))
-    onehot_difficulties[difficulties < 1 / 3, 0] = 1
-    onehot_difficulties[(1 / 3 <= difficulties) & (difficulties < 2 / 3), 1] = 1
-    onehot_difficulties[difficulties >= 2 / 3, 2] = 1
-    print(((onehot_difficulties == 1) & (labels == 1)).sum() / len(labels))
+    # difficulties = scalar_sequences[:, 1:, -1].mean(axis=1)
+    # onehot_difficulties = np.zeros((len(difficulties), 3))
+    # onehot_difficulties[difficulties < 1 / 3, 0] = 1
+    # onehot_difficulties[(1 / 3 <= difficulties) & (difficulties < 2 / 3), 1] = 1
+    # onehot_difficulties[difficulties >= 2 / 3, 2] = 1
+    # print(((onehot_difficulties == 1) & (labels == 1)).sum() / len(labels))
     print("loaded data")
     # Categorical input and embedding
     categorical_input = Input(
@@ -35,14 +35,12 @@ def run_model():
     normalization = Normalization()
     normalization.adapt(scalar_sequences)
     normalized_scalar = normalization(scalar_input)
-    categorical_dense = Dense(50)(categorical_input)
-    combined = Concatenate()([categorical_dense, normalized_scalar])
+    combined = Concatenate()([categorical_input, normalized_scalar])
 
     # Combine the two inputs
-    lstm_output = GRU(64)(combined)
+    lstm_output = GRU(128, return_sequences=True)(combined)
     # Add additional layers
-    x = Dense(64, activation="relu")(lstm_output)
-    x = Dropout(0.2)(x)
+    x = Dense(128, activation="relu")(lstm_output)
     x = Dense(32, activation="relu")(x)
 
     # Output layer
@@ -57,6 +55,13 @@ def run_model():
     )
 
     # model.summary()
+
+    # shuffle data
+    indices = np.arange(len(categorical_sequences))
+    np.random.shuffle(indices)
+    scalar_sequences = scalar_sequences[indices]
+    categorical_sequences = categorical_sequences[indices]
+    labels = labels[indices]
 
     train_split_percent = 0.8
     train_categorical, train_scalar, train_labels = (
@@ -74,11 +79,12 @@ def run_model():
         [train_categorical, train_scalar],
         train_labels,
         batch_size=BATCH_SIZE,
-        epochs=10,
+        epochs=30,
         validation_split=0.2,
     )
 
-    print(model.evaluate([test_categorical, test_scalar], test_labels))
+    model.evaluate([test_categorical, test_scalar], test_labels)
+    model.save("models/predictor.keras")
 
 
 run_model()
