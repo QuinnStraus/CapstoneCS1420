@@ -32,8 +32,8 @@ def process_skills(df: pd.DataFrame):
     return cleaned_df_skills
 
 
-SEQUENCE_LENGTH = 30
-SAVE_FOLDER = "no-fold-30"
+SEQUENCE_LENGTH = 10
+SAVE_FOLDER = "no-fold-10"
 
 
 def prepare_data():
@@ -191,14 +191,8 @@ def prepare_data():
     # split data into SEQUENCE_LENGTH-assignment sequences by student
     # and move the difficulty and num_started columns to the next row
     student_assignments = merged_assignment_logs.groupby("student_id")
-    NUM_FOLDS = 3
-    fold_overlap = SEQUENCE_LENGTH // NUM_FOLDS
 
-    total_sequences = (
-        (student_assignments.size() - 1 - (NUM_FOLDS - 1) * fold_overlap)
-        .floordiv(fold_overlap)
-        .sum()
-    )
+    total_sequences = (student_assignments.size() - 1).floordiv(SEQUENCE_LENGTH).sum()
     SCALAR_FEATURES = [
         "time_since_last",
         "time_until_due",
@@ -231,14 +225,12 @@ def prepare_data():
             .shift(-1)
             .fillna(0)
         )
-        for j in range(
-            0, (len(student_data) - 1 - (NUM_FOLDS - 1) * fold_overlap) // fold_overlap
-        ):
+        for j in range(0, (len(student_data) - 1) // SEQUENCE_LENGTH):
             sequence = student_data.iloc[
-                fold_overlap * j : fold_overlap * (j + NUM_FOLDS)
+                SEQUENCE_LENGTH * j : SEQUENCE_LENGTH * (j + 1)
             ]
             result_diff = student_data.iloc[
-                fold_overlap * j + 1 : fold_overlap * (j + NUM_FOLDS) + 1
+                SEQUENCE_LENGTH * j + 1 : SEQUENCE_LENGTH * (j + 1) + 1
             ]["difficulty"]
             labels[i] = (
                 np.array(
@@ -260,20 +252,22 @@ def prepare_data():
     print("scalar sequences", scalar_sequences.shape)
     print("categorical sequences", categorical_sequences.shape)
     print("labels", labels.shape)
-    np.save(f"cleaned/{SAVE_FOLDER}scalar_sequences.npy", scalar_sequences)
-    np.save(f"cleaned/{SAVE_FOLDER}categorical_sequences.npy", categorical_sequences)
-    np.save(f"cleaned/{SAVE_FOLDER}labels.npy", labels)
+    np.save(f"cleaned/{SAVE_FOLDER}/scalar_sequences.npy", scalar_sequences)
+    np.save(f"cleaned/{SAVE_FOLDER}/categorical_sequences.npy", categorical_sequences)
+    np.save(f"cleaned/{SAVE_FOLDER}/labels.npy", labels)
     print("data saved")
+
+
+def load_prepared_data():
+    scalar_sequences: np.ndarray = np.load(
+        f"cleaned/{SAVE_FOLDER}/scalar_sequences.npy"
+    )
+    categorical_sequences: np.ndarray = np.load(
+        f"cleaned/{SAVE_FOLDER}/categorical_sequences.npy"
+    )
+    labels: np.ndarray = np.load(f"cleaned/{SAVE_FOLDER}/labels.npy")
+    return scalar_sequences, categorical_sequences, labels
 
 
 if __name__ == "__main__":
     prepare_data()
-
-
-def load_prepared_data():
-    scalar_sequences: np.ndarray = np.load("cleaned/{SAVE_FOLDER}scalar_sequences.npy")
-    categorical_sequences: np.ndarray = np.load(
-        "cleaned/{SAVE_FOLDER}categorical_sequences.npy"
-    )
-    labels: np.ndarray = np.load("cleaned/{SAVE_FOLDER}labels.npy")
-    return scalar_sequences, categorical_sequences, labels
