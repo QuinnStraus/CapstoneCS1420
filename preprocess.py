@@ -11,10 +11,8 @@ def process_skills(df: pd.DataFrame):
         "\[|\]|\s", "", regex=True
     )
     unique_skills = cleaned_skills.str.split(",").explode().value_counts()
-    advanced_skills = unique_skills[
-        ~unique_skills.index.str.contains("'(?:1|2|3|4|5|6)\.", regex=True)
-    ]
-    unpopular_skills = advanced_skills[advanced_skills <= 50]
+    # Remove skills for grades 1-6
+    unpopular_skills = unique_skills[unique_skills <= 50]
     unpopular_skill_regex = "|".join(
         re.escape(sk) for sk in unpopular_skills.index.to_list()
     )
@@ -32,18 +30,18 @@ def process_skills(df: pd.DataFrame):
     return cleaned_df_skills
 
 
-SEQUENCE_LENGTH = 50
-MIN_ENTRIES = 10
-SAVE_FOLDER = "padded-50-10"
+SEQUENCE_LENGTH = 20
+SAVE_FOLDER = "no-fold-20"
 
 
 def prepare_data():
     problems, students, assignments, assignment_logs, problem_logs = load_raw_data()
     problems_onehot_skills = process_skills(problems)
-    print("processed problem skills")
+    print("processed problem skills", problems_onehot_skills.shape)
 
     categorical_data = pd.concat(
         [
+            # one-hot encode problem types (i.e. multiple choice, algebraic expression, etc.)
             pd.get_dummies(
                 problems[["problem_id", "problem_type"]],
                 columns=["problem_type"],
@@ -80,14 +78,14 @@ def prepare_data():
     print("average sequence length", student_assignment_counts.mean())
     valid_students = students[
         students["student_id"].isin(
-            student_assignment_counts[student_assignment_counts > MIN_ENTRIES].index
+            student_assignment_counts[student_assignment_counts > SEQUENCE_LENGTH].index
         )
     ]
     print(
         "valid students",
         len(valid_students),
         "average sequence length",
-        student_assignment_counts[student_assignment_counts > MIN_ENTRIES].mean(),
+        student_assignment_counts[student_assignment_counts > SEQUENCE_LENGTH].mean(),
     )
     valid_assignment_logs = valid_assignment_logs[
         valid_assignment_logs["student_id"].isin(valid_students["student_id"])
@@ -109,7 +107,7 @@ def prepare_data():
     average_time_to_correct = (
         processed_problem_logs[processed_problem_logs["correct"] == True]
         .groupby("problem_id")[["time_on_task"]]
-        .quantile(0.33)
+        .quantile(0.4)
     ).rename(columns={"time_on_task": "mean_time_on_task"})
     print(
         "average time to correct", average_time_to_correct["mean_time_on_task"].mean()
@@ -194,33 +192,43 @@ def prepare_data():
         on=["assignment_id", "student_id"],
         how="inner",
     )
+    merged_assignment_logs.to_pickle(
+        f"cleaned/{SAVE_FOLDER}/merged_assignment_logs.pkl"
+    )
     print("merged assignment logs", merged_assignment_logs.shape)
-    SCALAR_FEATURES = [
+
+
+EASY_THRESHOLD = 0.4
+MEDIUM_THRESHOLD = 0.80
+
+
+def convert_to_sequences(student_assignment_data: pd.DataFrame):
+    scalar_features = [
         "time_since_last",
         "time_until_due",
         "num_started",
         "assignment_completed",
         "assignment_type",
-        "difficulty",
     ]
     # normalize scalar features\
-    merged_assignment_logs[SCALAR_FEATURES] = (
-        merged_assignment_logs[SCALAR_FEATURES]
-        - merged_assignment_logs[SCALAR_FEATURES].mean()
-    ) / merged_assignment_logs[SCALAR_FEATURES].std()
+    student_assignment_data[scalar_features] = (
+        student_assignment_data[scalar_features]
+        - student_assignment_data[scalar_features].mean()
+    ) / student_assignment_data[scalar_features].std()
+    scalar_features += ["difficulty"]
     # split data into SEQUENCE_LENGTH-assignment sequences by student
     # and move the difficulty and num_started columns to the next row
-    student_assignments = merged_assignment_logs.groupby("student_id")
+    student_assignments = student_assignment_data.groupby("student_id")
 
-    # total_sequences = (student_assignments.size() - 1).floordiv(SEQUENCE_LENGTH).sum()
-    total_sequences = student_assignments.ngroups
+    total_sequences = (student_assignments.size() - 1).floordiv(SEQUENCE_LENGTH).sum()
+    # total_sequences = student_assignments.ngroups
     categorical_features = [
         col
-        for col in merged_assignment_logs.columns
+        for col in student_assignment_data.columns
         if col.startswith("problem_type") or col.startswith("'")
     ]
     scalar_sequences = np.ndarray(
-        (total_sequences, SEQUENCE_LENGTH, len(SCALAR_FEATURES))
+        (total_sequences, SEQUENCE_LENGTH, len(scalar_features))
     )
     categorical_sequences = np.ndarray(
         (
@@ -229,7 +237,7 @@ def prepare_data():
             len(categorical_features),
         )
     )
-    labels = np.ndarray((total_sequences, SEQUENCE_LENGTH, 3))
+    labels = np.ndarray((total_sequences, SEQUENCE_LENGTH))
     i = 0
     for _, student_data in tqdm(student_assignments):
         student_data = student_data.sort_values("start_time")
@@ -238,36 +246,31 @@ def prepare_data():
             .shift(-1)
             .fillna(0)
         )
-        # for j in range(0, (len(student_data) - 1) // SEQUENCE_LENGTH):
-        #     sequence = student_data.iloc[
-        #         SEQUENCE_LENGTH * j : SEQUENCE_LENGTH * (j + 1)
-        #     ]
-        #     result_diff = student_data.iloc[
-        #         SEQUENCE_LENGTH * j + 1 : SEQUENCE_LENGTH * (j + 1) + 1
-        # ]["difficulty"]
-        sequence = student_data.iloc[0 : min(SEQUENCE_LENGTH, len(student_data) - 1)]
-        result_diff = student_data.iloc[
-            1 : min(SEQUENCE_LENGTH + 1, len(student_data))
-        ]["difficulty"]
-        pad_sizes = [(0, max(SEQUENCE_LENGTH - len(sequence), 0)), (0, 0)]
-        labels[i] = np.pad(
-            np.array(
-                [
-                    (result_diff < 1 / 3).values,
-                    ((1 / 3 <= result_diff) & (result_diff < 2 / 3)).values,
-                    (result_diff >= 2 / 3).values,
-                ]
-            )
-            .swapaxes(0, 1)
-            .astype(int),
-            pad_sizes,
-        )
-
-        scalar_sequences[i] = np.pad(sequence[SCALAR_FEATURES].values, pad_sizes)
-        categorical_sequences[i] = np.pad(
-            sequence[categorical_features].values, pad_sizes
-        )
-        i += 1
+        for j in range(0, (len(student_data) - 1) // SEQUENCE_LENGTH):
+            sequence = student_data.iloc[
+                SEQUENCE_LENGTH * j : SEQUENCE_LENGTH * (j + 1)
+            ]
+            result_diff = student_data.iloc[
+                SEQUENCE_LENGTH * j + 1 : SEQUENCE_LENGTH * (j + 1) + 1
+            ]["difficulty"]
+            labels[i] = result_diff
+            # (
+            #     np.array(
+            #         [
+            #             (result_diff < EASY_THRESHOLD).values,
+            #             (
+            #                 (EASY_THRESHOLD <= result_diff)
+            #                 & (result_diff < MEDIUM_THRESHOLD)
+            #             ).values,
+            #             (result_diff >= MEDIUM_THRESHOLD).values,
+            #         ]
+            #     )
+            #     .swapaxes(0, 1)
+            #     .astype(int)
+            # )
+            scalar_sequences[i] = sequence[scalar_features].values
+            categorical_sequences[i] = sequence[categorical_features].values
+            i += 1
 
     print(i, "total sequences")
     print("scalar sequences", scalar_sequences.shape)
@@ -291,4 +294,9 @@ def load_prepared_data():
 
 
 if __name__ == "__main__":
-    prepare_data()
+    # prepare_data()
+    student_assignment_data = pd.read_pickle(
+        f"cleaned/{SAVE_FOLDER}/merged_assignment_logs.pkl"
+    )
+    print("read assignment logs")
+    convert_to_sequences(student_assignment_data)

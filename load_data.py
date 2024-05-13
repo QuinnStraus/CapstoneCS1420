@@ -27,27 +27,28 @@ def load_raw_data():
             pd.read_csv(NOV_PROBLEM_PATH),
         ]
     ).drop_duplicates("problem_id")
-    print("loaded problems")
+    print("loaded problems", problems.shape)
     students = pd.concat(
         [
             pd.read_csv(AUG_STUDENT_PATH),
             pd.read_csv(NOV_STUDENT_PATH),
         ]
     ).drop_duplicates("student_id")
-    print("loaded students")
+    print("loaded students", students.shape)
     assignments = pd.concat(
         [
             pd.read_csv(AUG_ASSIGNMENT_PATH),
             pd.read_csv(NOV_ASSIGNMENT_PATH),
         ]
     ).drop_duplicates("assignment_id")
-    print("loaded assignments")
+    print("loaded assignments", assignments.shape)
     assignment_logs = pd.concat(
         [
             pd.read_csv(AUG_ASSIGNMENT_LOG_PATH),
             pd.read_csv(NOV_ASSIGNMENT_LOG_PATH),
         ]
     )
-    print("loaded assignment logs")
+    print("loaded assignment logs", assignment_logs.shape)
     problem_logs: pd.DataFrame = pd.read_pickle(PROBLEM_LOG_PATH)
+    print("loaded problem logs", problem_logs.shape)
     return problems, students, assignments, assignment_logs, problem_logs
